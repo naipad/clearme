@@ -1,0 +1,84 @@
+name: cleanup
+
+# 每月 1 日 03:00 UTC 自动清理；也可以在 Actions 页面手动触发预览。
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      keep_releases:
+        description: 保留最近多少个 Release
+        type: string
+        default: "5"
+      keep_runs:
+        description: 保留最近多少次工作流运行
+        type: string
+        default: "30"
+      dry_run:
+        description: 只列出将要删除的内容，不实际删除
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理旧 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ github.event.inputs.keep_releases || '5' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -eu
+          case "$KEEP" in '' | *[!0-9]*) KEEP=5 ;; esac
+          [ "$KEEP" -ge 1 ] || KEEP=1
+
+          # 按创建时间从新到旧，保留前 KEEP 个；只删 Release，保留 git tag。
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq 'sort_by(.created_at) | reverse | .[].tag_name' || true)
+          n=0
+          for tag in $tags; do
+            n=$((n + 1))
+            [ "$n" -le "$KEEP" ] && continue
+            if [ "$DRY_RUN" = true ]; then
+              echo "将删除 Release：$tag"
+            else
+              echo "删除 Release：$tag"
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done
+          echo "Release 清理完成：保留最近 $KEEP 个，共 $n 个"
+
+      - name: 清理旧工作流运行
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ github.event.inputs.keep_runs || '30' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -eu
+          case "$KEEP" in '' | *[!0-9]*) KEEP=30 ;; esac
+          [ "$KEEP" -ge 1 ] || KEEP=1
+
+          # gh run list 默认按时间从新到旧，保留前 KEEP 次。
+          ids=$(gh run list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json databaseId --jq '.[].databaseId')
+          n=0
+          for id in $ids; do
+            n=$((n + 1))
+            [ "$n" -le "$KEEP" ] && continue
+            if [ "$DRY_RUN" = true ]; then
+              echo "将删除运行：$id"
+            else
+              echo "删除运行：$id"
+              gh run delete "$id" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+          echo "运行记录清理完成：保留最近 $KEEP 次，共 $n 次"

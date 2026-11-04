@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Test
+        run: |
+          test -z "$(gofmt -l .)"
+          sh -n install.sh
+          go vet ./...
+          go test ./...
+
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+          LDFLAGS="-s -w -X github.com/naipad/clearme/internal/version.Version=$VERSION"
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/clearme-amd64 .
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/clearme-arm64 .
+          cd dist
+          sha256sum clearme-amd64 clearme-arm64 > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/clearme-amd64
+            dist/clearme-arm64
+            dist/sha256sums.txt
+            install.sh

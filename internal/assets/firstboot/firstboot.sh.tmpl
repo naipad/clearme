@@ -1,0 +1,107 @@
+#!/bin/sh
+# 由 clearme 生成：首次启动时执行一次，然后自删除。
+set -u
+
+LOG=/var/log/clearme-firstboot.log
+exec >>"$LOG" 2>&1
+echo "=== clearme-firstboot start: $(date) ==="
+
+export DEBIAN_FRONTEND=noninteractive
+
+# 等待可用的 DNS/网络。
+i=0
+while [ $i -lt 30 ]; do
+    if getent hosts deb.debian.org >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 2
+done
+
+{{- if .ExtraRepos}}
+# --apt-repo 的源是安装收尾阶段才写入目标系统的，pkgsel 阶段看不到，
+# 额外源里的 --install 包在这里补装；其余软件包已在安装阶段装好。
+apt-get update -y || true
+{{- if .Packages}}
+apt-get install -y --no-install-recommends {{.Packages}} || true
+{{- end}}
+{{- end}}
+
+# 系统与内核优化；未启用优化时目录不存在，按文件名顺序执行。
+if [ -d /root/.clearme/optimize ]; then
+    for f in /root/.clearme/optimize/*.sh; do
+        [ -f "$f" ] || continue
+        sh "$f" || true
+    done
+fi
+
+{{- if .PostInstallB64}}
+echo {{.PostInstallB64}} | base64 -d > /root/.clearme/post-install.sh
+chmod 700 /root/.clearme/post-install.sh
+sh /root/.clearme/post-install.sh || true
+rm -f /root/.clearme/post-install.sh
+{{- end}}
+
+{{- if .Swap}}
+if ! swapon --show 2>/dev/null | grep -q .; then
+    # btrfs 上的 swapfile 必须为 NOCOW 且不能压缩；其他文件系统会忽略这些设置。
+    : > /swapfile
+    chattr +C /swapfile 2>/dev/null || true
+    btrfs property set /swapfile compression none 2>/dev/null || true
+    if fallocate -l {{.SwapSize}} /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count={{.SwapMB}} 2>/dev/null; then
+        chmod 600 /swapfile
+        if mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile 2>/dev/null; then
+            grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        fi
+    fi
+fi
+{{- end}}
+
+systemctl disable clearme-firstboot.service 2>/dev/null || true
+rm -f /etc/systemd/system/clearme-firstboot.service
+rm -f /etc/systemd/system/multi-user.target.wants/clearme-firstboot.service
+rm -f /root/.clearme/firstboot.sh
+rm -rf /root/.clearme/optimize
+rmdir /root/.clearme 2>/dev/null || true
+echo "=== clearme-firstboot done: $(date) ==="
+
+# 收尾清理：
+# 如果首次启动装入了更新的内核（例如 --apt-repo 的补装或安装后脚本），
+# 删除旧内核必须等重启，注册 clearme-cleanup.service；否则立即清理
+# apt 缓存和残留文件，不留下任何服务或脚本。
+if [ -x /root/.clearme/cleanup.sh ]; then
+    running="$(uname -r)"
+    newest="$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n 1)"
+    if [ -n "$newest" ] && [ "$newest" != "$running" ]; then
+        cat > /etc/systemd/system/clearme-cleanup.service <<'UNIT'
+[Unit]
+Description=clearme post-upgrade cleanup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/root/.clearme/cleanup.sh
+
+[Service]
+Type=oneshot
+ExecStart=/root/.clearme/cleanup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+        ln -sf /etc/systemd/system/clearme-cleanup.service \
+            /etc/systemd/system/multi-user.target.wants/clearme-cleanup.service
+        echo "检测到新内核 $newest，重启后自动清理旧内核和缓存"
+    else
+        sh /root/.clearme/cleanup.sh || true
+    fi
+fi
+
+# 不把安装过程的日志留在新系统里（无论是否启用了 apt 升级）：
+# /var/log/installer 是 d-i 保存的 syslog、partman、hardware-summary 等，
+# 我们的安装器 SSH 日志也被它一起复制到了这里。
+rm -f /var/log/clearme-installer-ssh.log
+rm -rf /var/log/installer
+rm -f /var/log/clearme-firstboot.log
+
+# 让 systemd 立刻忘掉已经删除的 unit；--upgrade none 时没有 cleanup 脚本代劳。
+systemctl daemon-reload 2>/dev/null || true

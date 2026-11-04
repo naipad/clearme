@@ -1,0 +1,134 @@
+#!/bin/sh
+# 由 clearme 生成：在 Debian 安装器环境中启动 sshd。
+# 默认注入；安装器重启后 sshd 随之消失，不影响目标系统。
+set -u
+
+PORT={{.SSHPort}}
+USER_NAME={{.Username}}
+PASS_FILE=/configs/clearme-installer-pass
+KEYS_FILE=/configs/clearme-installer-keys
+
+# --supervise 由后台进程反复执行，sshd 意外退出时会自动重启。
+supervise() {
+    # preseed 会被解析两次，early_command 也随之执行两次；用原子目录锁
+    # 保证只有一个守护进程，否则第二个实例会反复尝试绑定已被占用的端口。
+    mkdir /run/clearme-sshd.lock 2>/dev/null || exit 0
+    while :; do
+        /usr/sbin/sshd -D -e -p "$PORT" >>/var/log/clearme-installer-ssh.log 2>&1
+        sleep 5
+    done
+}
+
+if [ "${1:-}" = "--supervise" ]; then
+    supervise
+    exit 0
+fi
+
+mkdir -p /etc/ssh /run/sshd /var/log
+chmod 0755 /run/sshd
+
+# 权限分离需要 sshd 用户；d-i 的 /etc/passwd 里默认没有。
+grep -qs '^sshd:' /etc/passwd ||
+    echo 'sshd:*:100:65534::/run/sshd:/bin/false' >>/etc/passwd
+grep -qs '^sshd:' /etc/group ||
+    echo 'sshd:*:65534:' >>/etc/group
+
+hash=$(cat "$PASS_FILE" 2>/dev/null || true)
+
+# 确保安装器里有可登录的账户。目标系统的账户仍由 preseed 创建，
+# 这里只影响安装器自己的 /etc/passwd 等文件。
+ensure_account() {
+    name=$1
+    uid=$2
+    home=$3
+    grep -qs "^$name:" /etc/passwd ||
+        echo "$name:*:$uid:$uid:$name:$home:/bin/sh" >>/etc/passwd
+    grep -qs "^$name:" /etc/group ||
+        echo "$name:*:$uid:" >>/etc/group
+    if [ -n "$hash" ]; then
+        if grep -qs "^$name:" /etc/shadow; then
+            sed -i "s#^$name:[^:]*:#$name:$hash:#" /etc/shadow
+        else
+            echo "$name:$hash:19000:0:99999:7:::" >>/etc/shadow
+        fi
+    fi
+    mkdir -p "$home"
+}
+
+ensure_account root 0 /
+if [ "$USER_NAME" != root ]; then
+    ensure_account "$USER_NAME" 1000 "/home/$USER_NAME"
+    chown 1000:1000 "/home/$USER_NAME" 2>/dev/null || true
+fi
+
+# 公钥登录；没有公钥时只依赖上面的密码。
+if [ -s "$KEYS_FILE" ]; then
+    if [ "$USER_NAME" = root ]; then
+        home=/
+    else
+        home="/home/$USER_NAME"
+    fi
+    mkdir -p "$home/.ssh"
+    chmod 700 "$home/.ssh"
+    cat "$KEYS_FILE" >"$home/.ssh/authorized_keys"
+    chmod 600 "$home/.ssh/authorized_keys"
+    if [ "$USER_NAME" != root ]; then
+        chown -R 1000:1000 "$home/.ssh" 2>/dev/null || true
+    fi
+fi
+
+cat >/etc/ssh/sshd_config <<EOF
+Port $PORT
+PermitRootLogin yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+UseDNS no
+PrintMotd yes
+EOF
+
+# 登录后给出安装器里常用的命令。
+cat >/etc/motd <<'EOF'
+========================================
+ clearme：已进入 Debian 安装环境
+
+ 查看安装日志：
+   tail -fn+1 /var/log/syslog
+
+ 查看内核日志：
+   dmesg -w
+
+EOF
+
+# 串口/网络控制台启动时，d-i 本身运行在 screen 会话里，
+# 打开多用户权限后可以从 SSH 直接接入安装界面。
+if [ -n "${STY:-}" ] && [ -x /usr/bin/screen ]; then
+    if screen -X multiuser on 2>/dev/null; then
+        if [ "$USER_NAME" = root ]; then
+            attach="TERM=screen screen -x $STY"
+        else
+            chmod +s /usr/bin/screen 2>/dev/null || true
+            screen -X acladd "$USER_NAME" 2>/dev/null || true
+            attach="TERM=screen screen -x root/$STY"
+        fi
+        printf ' 接入安装界面（与本机控制台同步）：\n   %s\n\n' "$attach" >>/etc/motd
+    fi
+fi
+
+cat >>/etc/motd <<'EOF'
+ 安装完成后本会话会断开，机器自动重启。
+========================================
+EOF
+
+ssh-keygen -A >/dev/null 2>&1 || true
+
+# 用 screen 脱离 early_command 的会话；没有 screen 或启动失败时退回 nohup。
+if ! { command -v screen >/dev/null 2>&1 &&
+    screen -dmS clearme-sshd sh /clearme-assets/installer-ssh.sh --supervise 2>/dev/null; }; then
+    if command -v nohup >/dev/null 2>&1; then
+        nohup sh /clearme-assets/installer-ssh.sh --supervise >>/var/log/clearme-installer-ssh.log 2>&1 &
+    else
+        (sh /clearme-assets/installer-ssh.sh --supervise >>/var/log/clearme-installer-ssh.log 2>&1 &)
+    fi
+fi
+
+exit 0

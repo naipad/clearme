@@ -1,0 +1,37 @@
+#!/bin/sh
+# 由 clearme 生成：在 base-installer 选择内核之前补上安全仓库。
+# base 阶段 apt 只配置了主仓库，安全仓库要到 apt-setup 才生效；
+# 不提前刷新列表的话，会先安装主仓库里的旧内核，再由 pkgsel 升级。
+#
+# 这里依赖的是 d-i 多年未变的行为；任何一步失败都直接退出，
+# 让安装继续走原来的“先装旧内核、再由 pkgsel 升级”流程。
+set -u
+
+sources=/target/etc/apt/sources.list
+sources_dir=/target/etc/apt/sources.list.d
+
+if [ -f "$sources" ]; then
+    # 已经包含安全仓库时不再重复写入，列表也已经是最新的。
+    grep -qF '{{.SecurityRepo}}' "$sources" && exit 0
+    printf '%s\n' 'deb {{.SecurityRepo}} {{.SecuritySuite}} main' >>"$sources" || exit 0
+elif ls "$sources_dir"/*.sources >/dev/null 2>&1; then
+    # 新版 d-i 若改用 deb822 格式，按同样格式追加安全仓库。
+    if ! grep -qsF '{{.SecurityRepo}}' "$sources_dir"/*.sources; then
+        mkdir -p "$sources_dir" || exit 0
+        {
+            echo 'Types: deb'
+            echo 'URIs: {{.SecurityRepo}}'
+            echo 'Suites: {{.SecuritySuite}}'
+            echo 'Components: main'
+        } >"$sources_dir/clearme-early.sources" || exit 0
+    fi
+else
+    echo 'clearme: 未找到 apt 源配置，跳过安全仓库预热' >&2
+    exit 0
+fi
+
+# 刷新失败不阻断安装：pkgsel 阶段还会再升级一次。
+if ! chroot /target apt-get update >/dev/null 2>&1; then
+    echo 'clearme: 安全仓库刷新失败，安装继续（pkgsel 会再升级一次）' >&2
+fi
+exit 0
