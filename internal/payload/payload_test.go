@@ -399,8 +399,11 @@ func TestFixEthName(t *testing.T) {
 	if !strings.Contains(assets.FixEthNameService, "ConditionPathExists=") {
 		t.Error("fix-eth-name.service 需要 ConditionPathExists 保证一次性")
 	}
-	if !strings.Contains(assets.FixEthNameSh, `"# mac "`) {
+	if !strings.Contains(assets.FixEthNameSh, "'# mac '*") {
 		t.Error("fix-eth-name.sh 需要识别 # mac 标记")
+	}
+	if !strings.Contains(assets.FixEthNameSh, "/master") {
+		t.Error("fix-eth-name.sh 需要跳过带 master 的从设备")
 	}
 }
 
