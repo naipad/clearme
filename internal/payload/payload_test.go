@@ -151,9 +151,10 @@ func TestInstallerSSH(t *testing.T) {
 			t.Errorf("installer-ssh.sh missing %q", want)
 		}
 	}
-	// 有公钥时不注入密码文件，安装器只认公钥。
-	if pass, ok := found["configs/clearme-installer-pass"]; ok {
-		t.Errorf("有公钥时不应注入安装器密码文件：%+v", pass)
+	// 密码文件始终注入，安装器与目标系统用同一套凭据。
+	if pass := found["configs/clearme-installer-pass"]; pass.Mode&0777 != 0600 ||
+		!strings.Contains(string(pass.Data), "$6$salt$hash") {
+		t.Errorf("安装器密码文件不正确：%+v", pass)
 	}
 	if keys, ok := found["configs/clearme-installer-keys"]; !ok || !strings.Contains(string(keys.Data), "ssh-ed25519") {
 		t.Errorf("安装器公钥文件不正确：%+v", keys)
