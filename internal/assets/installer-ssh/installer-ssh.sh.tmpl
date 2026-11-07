@@ -55,8 +55,11 @@ ensure_account() {
     mkdir -p "$home"
 }
 
-ensure_account root 0 /
-if [ "$USER_NAME" != root ]; then
+# 只创建要登录的那个账户。root 保持 d-i 的锁定状态，避免安装器里出现
+# 一个没人预期的 root 密码登录入口。
+if [ "$USER_NAME" = root ]; then
+    ensure_account root 0 /
+else
     ensure_account "$USER_NAME" 1000 "/home/$USER_NAME"
     chown 1000:1000 "/home/$USER_NAME" 2>/dev/null || true
 fi
@@ -77,10 +80,22 @@ if [ -s "$KEYS_FILE" ]; then
     fi
 fi
 
+# 与目标系统保持一致：非 root 账户不开放 root 密码登录；有公钥时只认公钥。
+if [ "$USER_NAME" = root ]; then
+    root_login=yes
+else
+    root_login=prohibit-password
+fi
+if [ -s "$KEYS_FILE" ]; then
+    password_auth=no
+else
+    password_auth=yes
+fi
+
 cat >/etc/ssh/sshd_config <<EOF
 Port $PORT
-PermitRootLogin yes
-PasswordAuthentication yes
+PermitRootLogin $root_login
+PasswordAuthentication $password_auth
 KbdInteractiveAuthentication no
 UseDNS no
 PrintMotd yes

@@ -151,12 +151,47 @@ func TestInstallerSSH(t *testing.T) {
 			t.Errorf("installer-ssh.sh missing %q", want)
 		}
 	}
-	if pass := found["configs/clearme-installer-pass"]; pass.Mode&0777 != 0600 ||
-		!strings.Contains(string(pass.Data), "$6$salt$hash") {
-		t.Errorf("安装器密码文件不正确：%+v", pass)
+	// 有公钥时不注入密码文件，安装器只认公钥。
+	if pass, ok := found["configs/clearme-installer-pass"]; ok {
+		t.Errorf("有公钥时不应注入安装器密码文件：%+v", pass)
 	}
 	if keys, ok := found["configs/clearme-installer-keys"]; !ok || !strings.Contains(string(keys.Data), "ssh-ed25519") {
 		t.Errorf("安装器公钥文件不正确：%+v", keys)
+	}
+	// 非 root 账户时不得开放 root 密码登录。
+	if strings.Contains(string(script.Data), "PermitRootLogin yes") {
+		t.Error("USER_NAME 非 root 时不应写 PermitRootLogin yes")
+	}
+	if !strings.Contains(string(script.Data), "PermitRootLogin $root_login") {
+		t.Error("installer-ssh.sh 应按账户决定 PermitRootLogin")
+	}
+
+	// 无公钥时退回密码登录，密码文件必须存在且权限 0600。
+	noKeys := baseConfig()
+	noKeys.InstallerSSH = true
+	noKeys.Username = "root"
+	entries, err = Build(noKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = map[string]cpio.Entry{}
+	for _, e := range entries {
+		found[e.Name] = e
+	}
+	if pass := found["configs/clearme-installer-pass"]; pass.Mode&0777 != 0600 ||
+		!strings.Contains(string(pass.Data), "$6$salt$hash") {
+		t.Errorf("无公钥时安装器密码文件不正确：%+v", pass)
+	}
+	if _, ok := found["configs/clearme-installer-keys"]; ok {
+		t.Error("无公钥时不应注入公钥文件")
+	}
+	rootScript, err := renderInstallerSSH(noKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rootScript), "ensure_account root 0 /") ||
+		!strings.Contains(string(rootScript), "root_login=yes") {
+		t.Error("USER_NAME 为 root 时应创建 root 并允许 root 登录")
 	}
 	preseed, err := Preseed(enabled)
 	if err != nil {

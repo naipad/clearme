@@ -135,12 +135,13 @@ func Build(cfg Config) ([]cpio.Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries,
-			cpio.File("clearme-assets/installer-ssh.sh", 0755, script),
-			cpio.File("configs/clearme-installer-pass", 0600, []byte(cfg.PasswordHash+"\n")),
-		)
+		entries = append(entries, cpio.File("clearme-assets/installer-ssh.sh", 0755, script))
+		// 有公钥时安装器只开公钥登录，不注入密码文件，避免安装期间多出
+		// 一个可爆破的密码入口。
 		if cfg.AuthorizedKeys != "" {
 			entries = append(entries, cpio.File("configs/clearme-installer-keys", 0600, []byte(cfg.AuthorizedKeys)))
+		} else {
+			entries = append(entries, cpio.File("configs/clearme-installer-pass", 0600, []byte(cfg.PasswordHash+"\n")))
 		}
 	}
 	return entries, nil
