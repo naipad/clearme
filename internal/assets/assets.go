@@ -20,6 +20,18 @@ var FirstbootTmpl string
 //go:embed firstboot/cleanup.sh
 var CleanupSh string
 
+// FixEthNameSh 在首次启动时按 "# mac" 标记修正 interfaces 里的网卡名，
+// 避免安装器与目标系统命名规则不同导致网卡无法 ifup。
+//
+//go:embed firstboot/fix-eth-name.sh
+var FixEthNameSh string
+
+// FixEthNameService 是调用 FixEthNameSh 的一次性 systemd 单元，
+// 排在 networking.service 之前运行，执行后自删除。
+//
+//go:embed firstboot/fix-eth-name.service
+var FixEthNameService string
+
 // PartmanEarly 是安装器早期按磁盘标识定位设备(并在 keep-data 模式下
 // 删除非保留分区)的脚本。
 //

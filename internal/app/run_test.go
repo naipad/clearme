@@ -188,16 +188,17 @@ func TestDownloadFileSkipsVerified(t *testing.T) {
 // TestBuildInstallList 检查安装阶段会一次装齐用户包、sudo 和自动更新组件。
 func TestBuildInstallList(t *testing.T) {
 	got := buildInstallList(&Options{Username: "root", Install: "curl", Unattended: true})
-	if got != "curl unattended-upgrades" {
+	if got != "curl ifupdown unattended-upgrades" {
 		t.Errorf("root: %q", got)
 	}
 	got = buildInstallList(&Options{
 		Username: "deploy", Install: "curl sudo", Unattended: true, Fail2ban: true,
 	})
-	if got != "curl sudo unattended-upgrades fail2ban" {
+	if got != "curl sudo ifupdown unattended-upgrades fail2ban" {
 		t.Errorf("普通用户: %q", got)
 	}
-	if got := buildInstallList(&Options{Username: "root"}); got != "" {
+	// ifupdown 必须始终存在，否则目标系统没有东西去 ifup 网卡。
+	if got := buildInstallList(&Options{Username: "root"}); got != "ifupdown" {
 		t.Errorf("空列表: %q", got)
 	}
 }

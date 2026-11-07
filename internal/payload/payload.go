@@ -94,6 +94,8 @@ func Build(cfg Config) ([]cpio.Entry, error) {
 		cpio.File("preseed.cfg", 0644, []byte(preseed)),
 		cpio.File("clearme-assets/late.sh", 0755, []byte(renderLate(cfg))),
 		cpio.File("clearme-assets/firstboot.sh", 0755, firstboot),
+		cpio.File("clearme-assets/fix-eth-name.sh", 0755, []byte(assets.FixEthNameSh)),
+		cpio.File("clearme-assets/fix-eth-name.service", 0644, []byte(assets.FixEthNameService)),
 		cpio.File("clearme-assets/early.sh", 0755, []byte(assets.EarlySh)),
 	}
 	// 安全仓库在 base 阶段还不可见；把钩子放进 base-installer 的钩子目录，
@@ -213,6 +215,15 @@ ASSETS=/clearme-assets
 
 mkdir -p "$TARGET/root/.clearme"
 cp "$ASSETS/firstboot.sh" "$TARGET/root/.clearme/firstboot.sh"
+# 按 MAC 修正网卡名：安装器里探测到的名字可能和目标系统内核/udev 给出的
+# 不一致(例如 ens3 vs enp0s3)，不改写的话 ifup 找不到设备，装好的系统没网。
+cp "$ASSETS/fix-eth-name.sh" "$TARGET/root/.clearme/fix-eth-name.sh"
+chmod 755 "$TARGET/root/.clearme/fix-eth-name.sh"
+mkdir -p "$TARGET/etc/systemd/system/multi-user.target.wants"
+cp "$ASSETS/fix-eth-name.service" "$TARGET/etc/systemd/system/clearme-fix-eth-name.service"
+chmod 644 "$TARGET/etc/systemd/system/clearme-fix-eth-name.service"
+ln -sf /etc/systemd/system/clearme-fix-eth-name.service \
+    "$TARGET/etc/systemd/system/multi-user.target.wants/clearme-fix-eth-name.service"
 chmod 755 "$TARGET/root/.clearme/firstboot.sh"
 # 优化脚本只在启用系统优化时才会打包进 initrd。
 if [ -d "$ASSETS/optimize" ]; then
@@ -365,6 +376,13 @@ cat > "$TARGET/etc/network/interfaces" <<'IFACES'
 `)
 		b.WriteString(cfg.Interfaces)
 		b.WriteString("IFACES\n")
+		// d-i 的 ifupdown 不保证被启用（tasksel 只选 ssh-server 时
+		// standard 任务里的 ifupdown 可能没装），显式启用一次。
+		b.WriteString(`
+if [ -f "$TARGET/etc/init.d/networking" ]; then
+    in-target systemctl enable networking >/dev/null 2>&1 || true
+fi
+`)
 	}
 	if cfg.ResolvConf != "" {
 		// systemd-resolved 的软链接保持原样，直接覆盖会破坏解析。

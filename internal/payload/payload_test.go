@@ -361,6 +361,49 @@ func TestLateScriptNetwork(t *testing.T) {
 	}
 }
 
+// TestFixEthName 检查网卡改名脚本与一次性单元都被打包，且 late.sh 把它们
+// 装进目标系统并在 multi-user.target.wants 里启用。
+func TestFixEthName(t *testing.T) {
+	entries, err := Build(baseConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, e := range entries {
+		found[e.Name] = true
+	}
+	for _, want := range []string{
+		"clearme-assets/fix-eth-name.sh",
+		"clearme-assets/fix-eth-name.service",
+	} {
+		if !found[want] {
+			t.Errorf("initrd 缺少 %s", want)
+		}
+	}
+
+	late := renderLate(baseConfig())
+	for _, want := range []string{
+		`cp "$ASSETS/fix-eth-name.sh" "$TARGET/root/.clearme/fix-eth-name.sh"`,
+		`cp "$ASSETS/fix-eth-name.service" "$TARGET/etc/systemd/system/clearme-fix-eth-name.service"`,
+		"multi-user.target.wants/clearme-fix-eth-name.service",
+	} {
+		if !strings.Contains(late, want) {
+			t.Errorf("late.sh missing %q", want)
+		}
+	}
+
+	// 改名必须早于 ifup，否则改完也来不及。
+	if !strings.Contains(assets.FixEthNameService, "Before=networking.service") {
+		t.Error("fix-eth-name.service 必须排在 networking.service 之前")
+	}
+	if !strings.Contains(assets.FixEthNameService, "ConditionPathExists=") {
+		t.Error("fix-eth-name.service 需要 ConditionPathExists 保证一次性")
+	}
+	if !strings.Contains(assets.FixEthNameSh, `"# mac "`) {
+		t.Error("fix-eth-name.sh 需要识别 # mac 标记")
+	}
+}
+
 func TestOptimizeScripts(t *testing.T) {
 	entries, err := Build(baseConfig())
 	if err != nil {

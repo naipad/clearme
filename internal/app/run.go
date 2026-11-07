@@ -511,6 +511,9 @@ func buildInstallList(o *Options) string {
 			pkgs = append(pkgs, name)
 		}
 	}
+	// tasksel 只选 ssh-server 时，ifupdown 不会随 standard 任务装入，
+	// 目标系统里就没有任何东西去 ifup 网卡。这里显式保证它存在。
+	add("ifupdown")
 	if o.Username != "root" {
 		add("sudo")
 	}
