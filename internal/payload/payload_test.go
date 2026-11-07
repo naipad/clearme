@@ -715,7 +715,7 @@ func TestLateScriptEscaping(t *testing.T) {
 	out := renderLate(cfg)
 	for _, want := range []string{
 		"Port 22",
-		"PermitRootLogin no",
+		"PermitRootLogin prohibit-password",
 		"PasswordAuthentication no",
 		"/home/alice/.ssh/authorized_keys",
 		"90-user-alice",

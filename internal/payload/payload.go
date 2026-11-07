@@ -335,7 +335,7 @@ if [ -f "$SSHD" ]; then
 	if cfg.Username == "root" {
 		b.WriteString("    sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin yes/' \"$SSHD\" || true\n")
 	} else {
-		b.WriteString("    sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin no/' \"$SSHD\" || true\n")
+		b.WriteString("    sed -i -E 's/^#?PermitRootLogin .*/PermitRootLogin prohibit-password/' \"$SSHD\" || true\n")
 	}
 	if cfg.AuthorizedKeys != "" {
 		b.WriteString("    sed -i -E 's/^#?PasswordAuthentication .*/PasswordAuthentication no/' \"$SSHD\" || true\n")
