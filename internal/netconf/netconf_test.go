@@ -1,6 +1,8 @@
 package netconf
 
 import (
+	"net"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -247,6 +249,50 @@ func TestValidIface(t *testing.T) {
 	for _, name := range []string{"", "eth0; rm -rf /", "eth 0", "a/b", "$(id)"} {
 		if validIface(name) {
 			t.Errorf("%q should be rejected", name)
+		}
+	}
+}
+
+func TestParseResolvDropsLocalOnlyDNS(t *testing.T) {
+	data := "# comment\n" +
+		"nameserver 127.0.0.53\n" +
+		"nameserver 100.100.100.100\n" +
+		"nameserver fd7a:115c:a1e0::53\n" +
+		"nameserver fe80::1%eth0\n" +
+		"nameserver 192.168.1.1\n" +
+		"nameserver 2606:4700:4700::1111\n" +
+		"search example.com\n"
+	reach := func(string) bool { return true }
+	dns4, dns6, other := parseResolv(data, reach)
+	if want := []string{"192.168.1.1"}; !slices.Equal(dns4, want) {
+		t.Errorf("dns4 = %v, want %v", dns4, want)
+	}
+	if want := []string{"2606:4700:4700::1111"}; !slices.Equal(dns6, want) {
+		t.Errorf("dns6 = %v, want %v", dns6, want)
+	}
+	if want := []string{"search example.com"}; !slices.Equal(other, want) {
+		t.Errorf("other = %v, want %v", other, want)
+	}
+}
+
+func TestParseResolvDropsTunnelRoute(t *testing.T) {
+	data := "nameserver 10.8.0.1\nnameserver 1.1.1.1\n"
+	reach := func(host string) bool { return host != "10.8.0.1" }
+	dns4, _, _ := parseResolv(data, reach)
+	if want := []string{"1.1.1.1"}; !slices.Equal(dns4, want) {
+		t.Errorf("dns4 = %v, want %v", dns4, want)
+	}
+}
+
+func TestUsableDNS(t *testing.T) {
+	for _, s := range []string{"127.0.0.53", "100.100.100.100", "100.127.255.254", "fd7a:115c:a1e0::53", "fe80::1"} {
+		if usableDNS(net.ParseIP(s)) {
+			t.Errorf("%s should be rejected", s)
+		}
+	}
+	for _, s := range []string{"1.1.1.1", "192.168.1.1", "10.0.0.2", "2606:4700:4700::1111"} {
+		if !usableDNS(net.ParseIP(s)) {
+			t.Errorf("%s should be accepted", s)
 		}
 	}
 }

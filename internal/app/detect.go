@@ -138,14 +138,14 @@ func resolveNetwork(o *Options, releaseNo int, log *logx.Logger) (netconf.Net, n
 	}
 
 	opts := netconf.RenderOptions{Release: releaseNo}
-	applyDNS(o, &n, &opts)
+	applyDNS(o, &n, &opts, log)
 	return n, opts, nil
 }
 
 // applyDNS 计算目标系统使用的 DNS。
 // 用户显式给出 --dns 时以用户为准；否则静态地址优先沿用当前 resolv.conf，
 // 为空时退回到公共 DNS，动态地址则交给 DHCP/RA 下发。
-func applyDNS(o *Options, n *netconf.Net, opts *netconf.RenderOptions) {
+func applyDNS(o *Options, n *netconf.Net, opts *netconf.RenderOptions, log *logx.Logger) {
 	if o.DNSExplicit {
 		v4, v6 := splitDNS(o.DNS)
 		if o.IPv6DNS != "" {
@@ -165,10 +165,16 @@ func applyDNS(o *Options, n *netconf.Net, opts *netconf.RenderOptions) {
 		opts.WriteDNS6 = n.V6.Present() && len(v6) > 0
 	}
 
+	// 源系统的 DNS 可能来自 VPN(tun/wg/tailscale)，readResolv 已把它们过滤掉，
+	// 这里为空说明没有可沿用的地址，回退公共 DNS 并明确告知。
 	fallback4, fallback6 := netconf.FallbackDNS(o.China)
 	if n.Static && n.HasV4 {
 		if len(n.DNS4) == 0 {
 			n.DNS4 = fallback4
+			if log != nil {
+				log.Warn("当前系统的 DNS 不能用于目标系统(疑似 VPN/本地存根)，已改用 %s；如需其它地址用 --dns 指定",
+					strings.Join(fallback4, " "))
+			}
 		}
 		opts.DNS4 = n.DNS4
 		opts.WriteDNS4 = len(n.DNS4) > 0

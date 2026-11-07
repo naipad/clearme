@@ -439,7 +439,13 @@ func readResolv() (dns4, dns6, other []string) {
 	if err != nil {
 		return nil, nil, nil
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	return parseResolv(string(data), reachableDNS)
+}
+
+// parseResolv 解析 resolv.conf 内容，丢弃目标系统里无法使用的 nameserver。
+// reachable 判断地址是否走物理网卡，测试时可替换。
+func parseResolv(data string, reachable func(string) bool) (dns4, dns6, other []string) {
+	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -456,8 +462,13 @@ func readResolv() (dns4, dns6, other []string) {
 				host = host[:i]
 			}
 			ip := net.ParseIP(host)
-			if ip == nil || ip.IsLoopback() {
-				// 127.0.0.53 之类的本地存根在新系统里并不存在。
+			if ip == nil || !usableDNS(ip) {
+				// 127.0.0.53 存根、Tailscale MagicDNS 的 100.100.100.100
+				// 只在本机有效，写进目标系统会变成黑洞地址。
+				continue
+			}
+			if !reachable(host) {
+				// 公网地址但路由指向 VPN 网卡，同样只在当前会话有效。
 				continue
 			}
 			if ip.To4() != nil {
@@ -470,6 +481,45 @@ func readResolv() (dns4, dns6, other []string) {
 		}
 	}
 	return
+}
+
+// usableDNS 判断地址能否写进目标系统的 resolv.conf。
+// 回环是本地存根，链路本地与 ULA/CGNAT 只在当前网络的 overlay 里有效。
+// 私有 IPv4 不在此列：内网 DNS 在 IDC 里是正常配置。
+func usableDNS(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		// 100.64.0.0/10 运营商级 NAT，Tailscale MagicDNS 就在这一段。
+		return !(v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127)
+	}
+	// fc00::/7 唯一本地地址，Tailscale 的 fd7a:115c:a1e0::/48 属于这一类。
+	return !ip.IsPrivate()
+}
+
+// tunnelPrefixes 是 VPN/overlay 网卡的常见前缀。
+var tunnelPrefixes = []string{
+	"tun", "tap", "wg", "tailscale", "utun", "ppp", "nordlynx", "zt", "ipsec", "nebula",
+}
+
+// reachableDNS 判断 nameserver 是否走物理网卡。VPN 用公网地址做 DNS 时
+// 仅凭地址看不出来，这里按实际路由判断；无法判断时保留，避免误删可用配置。
+func reachableDNS(host string) bool {
+	out, err := system.OutputTimeout(2*time.Second, "ip", "route", "get", host)
+	if err != nil {
+		return true
+	}
+	iface, _, _ := parseRouteGet(out)
+	if iface == "" {
+		return true
+	}
+	for _, p := range tunnelPrefixes {
+		if strings.HasPrefix(iface, p) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseRouteGet(out string) (iface, src, gw string) {
